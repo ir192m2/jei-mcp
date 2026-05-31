@@ -8,18 +8,18 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.util.ITooltipFlag;
 import net.minecraft.item.ItemStack;
-import net.minecraft.util.text.ITooltipFlag;
 
 import mezz.jei.api.IJeiRuntime;
+import mezz.jei.api.IRecipeRegistry;
 import mezz.jei.api.ingredients.IIngredientHelper;
 import mezz.jei.api.ingredients.IIngredientRegistry;
 import mezz.jei.api.ingredients.VanillaTypes;
+import mezz.jei.api.ingredients.IIngredients;
 import mezz.jei.api.recipe.IFocus;
 import mezz.jei.api.recipe.IRecipeCategory;
-import mezz.jei.api.recipe.IRecipeRegistry;
 import mezz.jei.api.recipe.IRecipeWrapper;
-import mezz.jei.api.ingredients.IIngredients;
 import mezz.jei.ingredients.Ingredients;
 
 import com.jeimcp.bridge.JeiMcpBridgePlugin;
@@ -28,6 +28,7 @@ import com.jeimcp.bridge.JeiDataCache;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
@@ -85,7 +86,7 @@ public class JeiHttpBridgeServer {
         }
     }
 
-    private static void sendJson(HttpExchange exchange, Object data) throws Exception {
+    private static void sendJson(HttpExchange exchange, Object data) throws IOException {
         String json = GSON.toJson(data);
         byte[] bytes = json.getBytes("UTF-8");
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
@@ -96,7 +97,7 @@ public class JeiHttpBridgeServer {
         }
     }
 
-    private static void sendError(HttpExchange exchange, int code, String message) throws Exception {
+    private static void sendError(HttpExchange exchange, int code, String message) throws IOException {
         Map<String, Object> err = new HashMap<>();
         err.put("error", message);
         String json = GSON.toJson(err);
@@ -159,7 +160,7 @@ public class JeiHttpBridgeServer {
 
     static class HealthHandler implements HttpHandler {
         @Override
-        public void handle(HttpExchange exchange) throws Exception {
+        public void handle(HttpExchange exchange) throws IOException {
             if (!"GET".equals(exchange.getRequestMethod())) {
                 sendError(exchange, 405, "Method not allowed");
                 return;
@@ -175,7 +176,7 @@ public class JeiHttpBridgeServer {
 
     static class SearchItemsHandler implements HttpHandler {
         @Override
-        public void handle(HttpExchange exchange) throws Exception {
+        public void handle(HttpExchange exchange) throws IOException {
             if (!"GET".equals(exchange.getRequestMethod())) {
                 sendError(exchange, 405, "Method not allowed");
                 return;
@@ -212,7 +213,7 @@ public class JeiHttpBridgeServer {
 
     static class ListAllItemsHandler implements HttpHandler {
         @Override
-        public void handle(HttpExchange exchange) throws Exception {
+        public void handle(HttpExchange exchange) throws IOException {
             if (!"GET".equals(exchange.getRequestMethod())) {
                 sendError(exchange, 405, "Method not allowed");
                 return;
@@ -240,7 +241,7 @@ public class JeiHttpBridgeServer {
 
     static class ItemCountHandler implements HttpHandler {
         @Override
-        public void handle(HttpExchange exchange) throws Exception {
+        public void handle(HttpExchange exchange) throws IOException {
             if (!"GET".equals(exchange.getRequestMethod())) {
                 sendError(exchange, 405, "Method not allowed");
                 return;
@@ -258,7 +259,7 @@ public class JeiHttpBridgeServer {
 
     static class ItemDetailOrRecipesHandler implements HttpHandler {
         @Override
-        public void handle(HttpExchange exchange) throws Exception {
+        public void handle(HttpExchange exchange) throws IOException {
             if (!"GET".equals(exchange.getRequestMethod())) {
                 sendError(exchange, 405, "Method not allowed");
                 return;
@@ -349,7 +350,7 @@ public class JeiHttpBridgeServer {
 
     static class CategoriesHandler implements HttpHandler {
         @Override
-        public void handle(HttpExchange exchange) throws Exception {
+        public void handle(HttpExchange exchange) throws IOException {
             if (!"GET".equals(exchange.getRequestMethod())) {
                 sendError(exchange, 405, "Method not allowed");
                 return;

@@ -1,28 +1,26 @@
-buildscript {
-    repositories {
-        mavenCentral()
-        maven {
-            name = "GTNH Maven"
-            url = "https://nexus.gtnewhorizons.com/repository/public/"
-        }
-    }
-    dependencies {
-        classpath "com.gtnewhorizons:retrofuturaGradle:1.3.27"
-    }
+plugins {
+    id "com.gtnewhorizons.retrofuturagradle" version "1.3.+"
+    id "java"
+    id "maven-publish"
 }
-
-apply plugin: "java"
-apply plugin: "com.gtnewhorizons.retrofuturagradle"
-apply plugin: "maven-publish"
 
 group = "com.jeimcp"
 version = "1.0.0"
-archivesBaseName = "jei-mcp-bridge"
+
+base {
+    archivesName = "jei-mcp-bridge"
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(8)
+    }
+}
 
 minecraft {
     mcVersion = "1.12.2"
-    forgeVersion = "14.23.5.2860"
-    mainClass = "GradleStart"
+    mcpMappingChannel = "stable"
+    mcpMappingVersion = "39"
 }
 
 repositories {
@@ -41,18 +39,12 @@ repositories {
 }
 
 dependencies {
-    // JEI 4.16.x for 1.12.2
-    // Option 1: Download from CurseMaven (replace file ID if needed)
     implementation rfg.deobf("curse.maven:jei-238222:3043174")
-
-    // Option 2: Place jei_1.12.2-4.16.1.jar in mod/libs/ and uncomment:
-    // implementation fg.deobf("mezz.jei:jei_1.12.2:4.16.1")
 }
 
 processResources {
-    inputs.property "version", project.version
-    inputs.property "mcversion", project.minecraft.mcVersion
-
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    inputs.property("version", project.version)
     from(sourceSets.main.resources.srcDirs) {
         include "mcmod.info"
         expand "version": project.version, "mcversion": project.minecraft.mcVersion

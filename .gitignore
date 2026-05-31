@@ -1,0 +1,14 @@
+# MCP server
+server/node_modules/
+server/dist/
+
+# Forge mod
+mod/build/
+mod/.gradle/
+mod/bin/
+mod/out/
+*.class
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,24 @@
+[
+  {
+    "modid": "jei_mcp_bridge",
+    "name": "JEI MCP Bridge",
+    "description": "Exposes JEI data via a local HTTP API for MCP (Model Context Protocol) integration.",
+    "version": "${version}",
+    "mcversion": "${mcversion}",
+    "url": "",
+    "updateUrl": "",
+    "authorList": ["KiloCode"],
+    "credits": "",
+    "logoFile": "",
+    "screenshots": [],
+    "dependencies": [
+      {
+        "modid": "jei",
+        "mandatory": true,
+        "version": "4.16.0",
+        "ordering": "after",
+        "side": "CLIENT"
+      }
+    ]
+  }
+]

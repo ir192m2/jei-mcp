@@ -2,14 +2,17 @@
 
 Bridges [Just Enough Items (JEI)](https://github.com/mezz/JustEnoughItems) (1.12.2) to [Model Context Protocol (MCP)](https://modelcontextprotocol.io), allowing AI assistants (KiloCode, Claude, etc.) to query live Minecraft item and recipe data from a running game instance.
 
-Includes a **local SQLite graph engine** that indexes all 21K items and 31K recipe relationships with FTS5 search, BFS/DFS traversal, shortest path, cycle detection, and impact analysis — works fully offline without the JVM.
+Includes a **local SQLite graph engine** that indexes 21,000+ items and 27+ million raw recipe relationships with FTS5 search, BFS/DFS traversal, shortest path, cycle detection, and impact analysis — works fully offline without the JVM.
 
 ## Architecture
 
 ```
 Live mode:    KiloCode ──MCP stdio──> jei-mcp-server ──HTTP :18732──> Minecraft (Forge mod + JEI)
 
-Offline mode: KiloCode ──CLI──────> query.js ──SQLite──> jei-graph/graph.db (21K items, 31K edges)
+Offline mode: KiloCode ──MCP stdio──> jei-mcp-server ──SQLite──> jei-graph/graph.db
+                                                  (7 jei_* tools, no JVM needed)
+                                                  
+Or directly:  KiloCode ──CLI──────> query.js ──SQLite──> jei-graph/graph.db
 ```
 
 Three components:
@@ -28,8 +31,9 @@ A client-side Forge mod that:
 An MCP stdio server that:
 - Implements the Model Context Protocol via `@modelcontextprotocol/sdk`
 - Provides 7 tools that proxy requests to the in-game HTTP server
-- Handles connection errors gracefully when Minecraft isn't running
+- Handles connection errors gracefully when Minecraft isn't running (`isBridgeDown()` + `bridgeError()` helpers detect `ECONNREFUSED`, `ENOTFOUND`, `fetch failed`)
 - Uses Zod schema validation for all tool parameters
+- Requires **Node.js 26+** for `node:sqlite` (FTS5)
 
 ### 3. `server/src/graph/` — SQLite Graph Engine (offline)
 
@@ -38,7 +42,7 @@ A local SQLite-backed recipe graph that works fully offline — no JVM required:
 - `search.js` — BM25 ranked search, item/recipe/use queries
 - `traversal.js` — BFS, DFS, shortest path, subgraph extraction, ancestors/descendants, cycle detection, impact analysis
 - `context.js` — LLM-ready context builder, dependency trees
-- `import.js` — JSON → SQLite importer (runs in ~0.6s)
+- `import.js` — JSON → SQLite importer (streaming NDJSON, ~3 min for 31M lines)
 - `query.js` — Interactive CLI with 22 commands
 
 Built on graph algorithms adapted from [CodeGraph](https://github.com/colbymchenry/codegraph).
@@ -50,7 +54,7 @@ Built on graph algorithms adapted from [CodeGraph](https://github.com/colbymchen
 - Minecraft 1.12.2 with Forge 14.23.5.2860+
 - JEI 4.16.x for 1.12.2 (CurseMaven file 3043174)
 - JDK 21 (to run Gradle), targeting JDK 8 bytecode
-- Node.js 18+ (for MCP server)
+- Node.js 26+ (for the MCP server — uses built-in `node:sqlite` with FTS5)
 
 ### Building the Mod
 
@@ -74,7 +78,10 @@ npm run build
 
 ### Configuring KiloCode
 
-Add the MCP server to your KiloCode configuration:
+> **See [`docs/MCP-SETUP.md`](../../docs/MCP-SETUP.md)** for the full
+> `kilo.json` snippet that registers both `jei-mcp` and `bq-mcp` together.
+
+Quickstart (this repo only):
 
 ```jsonc
 // .kilo/kilo.jsonc
@@ -98,23 +105,36 @@ The HTTP server starts on `127.0.0.1:18732` automatically. You can verify it's r
 
 ```bash
 curl http://127.0.0.1:18732/api/health
-# {"status":"ok","jei_runtime":true,"item_count":22277}
+# {"status":"ok","jei_runtime":true,"item_count":22315}
 ```
 
 ## Graph Engine (Offline)
 
-Query the full recipe graph without running Minecraft. Data is fetched once via the HTTP bridge, then stored in SQLite.
+Query the full recipe graph without running Minecraft. Data is exported
+once from the live bridge into JSON, then stored in SQLite.
 
 ```bash
-# 1. Fetch graph data (requires running Minecraft + JEI bridge)
-cd server && node dist/fetch-graph.js
+# 1. Export graph data from a running Minecraft + JEI bridge (~3 min)
+cd server
+node scripts/export-graph.mjs --concurrency 12
+#   writes jei-graph/items.json (~2.5 MB)
+#   writes jei-graph/edges.json (~2.0 GB, NDJSON)
 
-# 2. Import into SQLite (~0.6s)
+# 2. Import into SQLite (~3 min, single pass)
 node src/graph/import.js
+#   writes jei-graph/graph.db (~9.5 GB)
 
-# 3. Interactive query tool (no JVM needed)
+# 3a. Use the MCP server offline (7 tools, no JVM needed)
+npm start
+#   bq_graph_* tools work even when MC isn't running
+
+# 3b. Or the interactive query CLI (22 commands, no JVM needed)
 node src/graph/query.js
 ```
+
+The export script writes a `.bak` of any existing `items.json` /
+`edges.json` before replacing. The import script writes atomically
+into `graph.db` (`.db-wal` + `.db-shm` are siblings).
 
 ### Graph Engine Commands
 
@@ -142,11 +162,22 @@ node src/graph/query.js
 | `top [limit]` | Most connected items |
 | `stats` | Overview |
 
-### Graph Stats
+### Current Graph Stats (NITRO modpack snapshot)
 
-Stats vary by modpack. After running `fetch-graph.js` + `import.js`, use the `stats` command to see yours.
+| Metric | Value |
+|--------|-------|
+| Items | 21,357 |
+| Raw edges | 27,619,351 |
+| Mods | 55 |
+| Categories | 121 |
+| `graph.db` size | 9.5 GB |
+| BFS cold | 7-15 s; warm | 7-15 ms |
+
+Use the `stats` command after a fresh export + import to see the current numbers for your modpack.
 
 ## MCP Tools
+
+All 7 tools are thin proxies to the HTTP bridge (or the offline graph if Minecraft is down — the bridge is checked per-call and the tool returns a clear "Bridge not running" error).
 
 ### `jei_search_items`
 
@@ -261,7 +292,7 @@ Check if the JEI bridge mod is running and connected. Use this to verify the bri
 ```
 jei_health()
 ```
-**Returns:** `{ status: "ok", jei_runtime: true, item_count: 22277 }`
+**Returns:** `{ status: "ok", jei_runtime: true, item_count: 22315 }`
 
 ## HTTP API (Direct)
 
@@ -279,6 +310,8 @@ The mod exposes these REST endpoints on `http://127.0.0.1:18732/api/`:
 | `/categories` | GET | — | All recipe categories |
 
 All endpoints return JSON. Errors return `{ "error": "message" }` with appropriate HTTP status codes (400, 404, 405, 500).
+
+`limit` and `offset` are bounded by `parseBoundedInt()` (non-numeric → 400, negative → 400, over-max → clamped).
 
 ## Technical Details
 
@@ -298,7 +331,8 @@ All endpoints return JSON. Errors return `{ "error": "message" }` with appropria
 | `jei_runtime: false` | Wait for JEI to fully initialize after joining a world |
 | `Bridge not reachable` | Minecraft isn't running, or mod JAR not in `mods/` folder |
 | Empty recipe results | Item may not have recipes in JEI (creative-only items) |
-| MCP server won't start | Ensure `npm run build` completed successfully, check Node.js version |
+| MCP server won't start | Ensure `npm run build` completed successfully, check Node.js version (26+ for `node:sqlite`) |
+| Smoke tests fail | Re-run `node scripts/export-graph.mjs && node src/graph/import.js` |
 
 ## File Structure
 
@@ -308,22 +342,28 @@ jei-mcp/
 │   ├── build.gradle                   # RetroFuturaGradle 1.3.x, JEI via CurseMaven
 │   ├── settings.gradle
 │   ├── gradlew
-│   └── src/main/java/com/jeimcp/bridge/
-│       ├── JeiMcpBridgePlugin.java   # @JEIPlugin, captures runtime + registry
-│       ├── JeiDataCache.java          # O(1) UID lookup, search, sorted items
-│       └── http/
-│           └── JeiHttpBridgeServer.java  # 8 HTTP handlers
+│   └── src/
+│       ├── main/java/com/jeimcp/bridge/
+│       │   ├── JeiMcpBridgeMod.java   # @Mod entry, client/server lifecycle
+│       │   ├── JeiMcpBridgePlugin.java  # @JEIPlugin, captures runtime + registry
+│       │   ├── JeiDataCache.java        # O(1) UID lookup, search, sorted items
+│       │   ├── BridgeConfig.java        # port resolution, testable
+│       │   └── http/
+│       │       └── JeiHttpBridgeServer.java  # 6 HTTP handlers
+│       └── test/java/com/jeimcp/bridge/
+│           └── BridgeConfigTest.java    # 10 unit tests
 ├── server/
 │   ├── package.json
 │   ├── tsconfig.json
 │   ├── dist/                          # Built output (gitignored)
-│   │   ├── index.js                   # MCP server (7 tools)
-│   │   └── fetch-graph.js             # Full JEI graph crawler → JSON
+│   │   └── index.js                   # MCP server (7 tools)
+│   ├── scripts/
+│   │   └── export-graph.mjs           # Live-bridge → JSON exporter
 │   └── src/
 │       ├── index.ts                   # MCP server source
 │       └── graph/                     # SQLite graph engine (offline)
 │           ├── db.js                  # SQLite connection, schema, FTS5
-│           ├── search.js              # BM25 search, item/recipe/use queries
+│           ├── search.js              # FTS5 escape, BM25 search
 │           ├── traversal.js           # BFS, DFS, path, cycles, impact
 │           ├── context.js             # LLM context builder, trees
 │           ├── import.js              # JSON → SQLite importer
@@ -335,7 +375,13 @@ jei-mcp/
 │       ├── master.mjs                 # runs all suites
 │       └── README.md
 ├── jei-graph/                         # Generated graph data (gitignored)
+│   ├── items.json
+│   ├── edges.json
+│   ├── graph.db                       # SQLite
+│   └── stats.json
 ├── GRAPH-ENGINE.md                    # Graph engine documentation
+├── CHANGELOG.md
+├── LICENSE                            # MIT
 ├── .gitignore
 └── README.md
 ```
@@ -355,7 +401,7 @@ npm run test:fuzz
 | JEI MCP | 90 | MCP server via JSON-RPC stdio |
 | State Integration | 23 | Cross-bridge workflow |
 
-See `test/fuzz/README.md` for details, individual suite runners, and bug history.
+See `test/fuzz/README.md` for details, individual suite runners, and bug history (7 bugs found and fixed before v1.0.0).
 
 ### Unit Tests
 
@@ -366,8 +412,24 @@ JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew test
 
 10 tests covering `BridgeConfig`.
 
-### Known Limitations
+### Engine Smoke Tests
+
+```bash
+cd server
+node test/smoke.mjs
+```
+
+19 tests covering `stats`, `search`, `findPath`, `subgraph`, `getAncestors`, `getDescendants`, `detectCycles`, `impactAnalysis`.
+
+## Related
+
+- **[`bq-mcp`](../bq-mcp/)** — companion repo with the same architecture for BetterQuesting (read + write + 10-tool offline questbook graph)
+- **[`docs/MCP-SETUP.md`](../docs/MCP-SETUP.md)** — shared setup guide (kilo.json, ports, prerequisites)
+
+## Known Limitations
 
 - Empty search queries return HTTP 400 (correct behavior)
 - `recipes`/`uses` endpoints ignore the `limit` query parameter (returns all results)
 - URL-encoded `&` in search queries (`%26`) triggers query string splitting (server uses decoded `getQuery()` not raw `getRawQuery()`)
+- Live bridge requires JEI to finish initialization after joining a world (returns `jei_runtime: false` until ready)
+

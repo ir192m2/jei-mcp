@@ -1,0 +1,7 @@
+edges.json
+edges.json.bak
+edges.json.tmp
+graph.db
+graph.db-wal
+graph.db-shm
+report.json

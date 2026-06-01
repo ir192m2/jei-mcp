@@ -1,15 +1,24 @@
-export function searchItems(db, query, options = {}) {
-  const { limit = 20, mod, kind } = options;
-
-  let ftsQuery = query
+function buildFtsQuery(query) {
+  return String(query || "")
     .replace(/[^\w\s:-]/g, " ")
     .split(/\s+/)
     .filter((t) => t.length > 0)
     .map((t) => `"${t}"*`)
     .join(" ");
+}
 
-  if (mod) ftsQuery += ` AND mod_id:${mod}`;
-  if (kind) ftsQuery += ` AND kind:${kind}`;
+export function searchItems(db, query, options = {}) {
+  const { limit = 20, mod } = options;
+
+  if (!query || !query.trim()) return [];
+
+  let ftsQuery = buildFtsQuery(query);
+  if (!ftsQuery) return [];
+
+  if (mod) {
+    const safeMod = String(mod).replace(/[^a-zA-Z0-9_]/g, "");
+    if (safeMod) ftsQuery += ` AND mod_id:"${safeMod}"`;
+  }
 
   try {
     const stmt = db.prepare(`
@@ -22,7 +31,8 @@ export function searchItems(db, query, options = {}) {
       LIMIT ?
     `);
     return stmt.all(ftsQuery, limit);
-  } catch {
+  } catch (e) {
+    console.warn(`[searchItems] FTS query failed for "${query}": ${e.message}; falling back to LIKE`);
     return fallbackSearch(db, query, limit, mod);
   }
 }
@@ -38,19 +48,23 @@ function fallbackSearch(db, query, limit, mod) {
 }
 
 export function searchEdges(db, query, limit = 20) {
+  if (!query || !query.trim()) return [];
+  const ftsQuery = buildFtsQuery(query);
+  if (!ftsQuery) return [];
   try {
     const stmt = db.prepare(`
-      SELECT e.source, e.target, e.category, e.multiplicity
+      SELECT e.source, e.target, e.category
       FROM edges_fts f
-      JOIN edges e ON e.rowid = f.rowid
+      JOIN edges e ON e.id = f.rowid
       WHERE edges_fts MATCH ?
       ORDER BY rank
       LIMIT ?
     `);
-    return stmt.all(`"${query}"*`, limit);
-  } catch {
+    return stmt.all(ftsQuery, limit);
+  } catch (e) {
+    console.warn(`[searchEdges] FTS query failed for "${query}": ${e.message}; falling back to LIKE`);
     return db.prepare(`
-      SELECT source, target, category, multiplicity FROM edges
+      SELECT source, target, category FROM edges
       WHERE category LIKE ? OR source LIKE ? OR target LIKE ?
       LIMIT ?
     `).all(`%${query}%`, `%${query}%`, `%${query}%`, limit);
@@ -63,22 +77,22 @@ export function getItem(db, uid) {
 
 export function getRecipes(db, uid, limit = 50) {
   return db.prepare(`
-    SELECT e.target as uid, e.category, e.multiplicity, i.display_name, i.mod_id
+    SELECT e.target as uid, e.category, i.display_name, i.mod_id
     FROM edges e
     JOIN items i ON i.uid = e.target
     WHERE e.source = ? AND e.category != 'jei.information'
-    ORDER BY e.multiplicity DESC, e.category
+    ORDER BY e.category
     LIMIT ?
   `).all(uid, limit);
 }
 
 export function getUses(db, uid, limit = 50) {
   return db.prepare(`
-    SELECT e.source as uid, e.category, e.multiplicity, i.display_name, i.mod_id
+    SELECT e.source as uid, e.category, i.display_name, i.mod_id
     FROM edges e
     JOIN items i ON i.uid = e.source
     WHERE e.target = ? AND e.category != 'jei.information'
-    ORDER BY e.multiplicity DESC, e.category
+    ORDER BY e.category
     LIMIT ?
   `).all(uid, limit);
 }
@@ -94,10 +108,10 @@ export function getModStats(db, limit = 30) {
 
 export function getCategoryStats(db, limit = 30) {
   return db.prepare(`
-    SELECT category, SUM(multiplicity) as total_recipes, COUNT(*) as unique_pairs
+    SELECT category, COUNT(*) as edge_count
     FROM edges
     GROUP BY category
-    ORDER BY total_recipes DESC
+    ORDER BY edge_count DESC
     LIMIT ?
   `).all(limit);
 }
@@ -113,15 +127,19 @@ export function getTopConnected(db, limit = 20) {
   `).all(limit);
 }
 
+import { getMetaNumber } from "./db.js";
+
 export function countItems(db) {
-  return db.prepare("SELECT COUNT(*) as c FROM items").get().c;
+  const v = getMetaNumber(db, "item_count");
+  return v > 0 ? v : db.prepare("SELECT COUNT(*) as c FROM items").get().c;
 }
 
 export function countEdges(db) {
-  const row = db.prepare("SELECT COUNT(*) as unique_edges, SUM(multiplicity) as total_edges FROM edges").get();
-  return { unique: row.unique_edges, total: row.total_edges };
+  const v = getMetaNumber(db, "edge_count");
+  return { raw: v > 0 ? v : db.prepare("SELECT COUNT(*) as c FROM edges").get().c };
 }
 
 export function countMods(db) {
-  return db.prepare("SELECT COUNT(*) as c FROM mods").get().c;
+  const v = getMetaNumber(db, "mod_count");
+  return v > 0 ? v : db.prepare("SELECT COUNT(*) as c FROM mods").get().c;
 }

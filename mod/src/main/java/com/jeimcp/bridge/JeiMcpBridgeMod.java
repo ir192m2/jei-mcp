@@ -23,7 +23,8 @@ public class JeiMcpBridgeMod {
 
     @Mod.EventHandler
     public void preInit(FMLPreInitializationEvent event) {
-        LOG.info("JEI MCP Bridge initializing");
+        BridgeConfig.resolve(event);
+        LOG.info("JEI MCP Bridge initializing (port={})", BridgeConfig.get().getPort());
     }
 
     @Mod.EventHandler

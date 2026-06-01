@@ -10,7 +10,8 @@
     "dev": "tsx watch src/index.ts",
     "graph:import": "node src/graph/import.js",
     "graph:query": "node src/graph/query.js",
-    "graph:fetch": "node dist/fetch-graph.js"
+    "graph:fetch": "node dist/fetch-graph.js",
+    "test:fuzz": "node ../test/fuzz/master.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"

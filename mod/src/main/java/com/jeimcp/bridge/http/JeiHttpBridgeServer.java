@@ -37,16 +37,25 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public class JeiHttpBridgeServer {
-    public static final int PORT = 18732;
+    public static final int DEFAULT_PORT = 18732;
 
     private static final Logger LOG = LogManager.getLogger("jei_mcp_bridge");
     private static final Gson GSON = new GsonBuilder().create();
 
+    private final int port;
     private HttpServer server;
     private final ExecutorService httpThreadPool = Executors.newFixedThreadPool(4);
 
+    public JeiHttpBridgeServer(int port) {
+        this.port = port;
+    }
+
+    public int getPort() {
+        return port;
+    }
+
     public void start() throws Exception {
-        server = HttpServer.create(new InetSocketAddress("127.0.0.1", PORT), 0);
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         server.createContext("/api/health", new HealthHandler());
         server.createContext("/api/items/search", new SearchItemsHandler());
         server.createContext("/api/items/all", new ListAllItemsHandler());
@@ -126,6 +135,19 @@ public class JeiHttpBridgeServer {
         return params;
     }
 
+    private static int parseBoundedInt(String raw, String name, int min, int max) {
+        if (raw == null || raw.isEmpty()) throw new IllegalArgumentException("Missing " + name);
+        int v;
+        try {
+            v = Integer.parseInt(raw);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid " + name + " value: not a number");
+        }
+        if (v < min) throw new IllegalArgumentException("Invalid " + name + " value: must be >= " + min);
+        if (v > max) return max;
+        return v;
+    }
+
     private static <T> T withMainThread(Callable<T> task, HttpExchange exchange) throws Exception {
         return runOnMainThread(() -> {
             try {
@@ -184,11 +206,19 @@ public class JeiHttpBridgeServer {
             }
             Map<String, String> params = parseQuery(exchange.getRequestURI().getQuery());
             String query = params.getOrDefault("q", "");
-            int limit = Math.min(Integer.parseInt(params.getOrDefault("limit", "50")), 500);
-            int offset = Integer.parseInt(params.getOrDefault("offset", "0"));
 
             if (query.isEmpty()) {
                 sendError(exchange, 400, "Missing query parameter 'q'");
+                return;
+            }
+
+            int limit;
+            int offset;
+            try {
+                limit = parseBoundedInt(params.getOrDefault("limit", "50"), "limit", 0, 500);
+                offset = parseBoundedInt(params.getOrDefault("offset", "0"), "offset", 0, Integer.MAX_VALUE);
+            } catch (IllegalArgumentException e) {
+                sendError(exchange, 400, e.getMessage());
                 return;
             }
 
@@ -220,8 +250,15 @@ public class JeiHttpBridgeServer {
                 return;
             }
             Map<String, String> params = parseQuery(exchange.getRequestURI().getQuery());
-            int limit = Math.min(Integer.parseInt(params.getOrDefault("limit", "200")), 5000);
-            int offset = Integer.parseInt(params.getOrDefault("offset", "0"));
+            int limit;
+            int offset;
+            try {
+                limit = parseBoundedInt(params.getOrDefault("limit", "200"), "limit", 0, 5000);
+                offset = parseBoundedInt(params.getOrDefault("offset", "0"), "offset", 0, Integer.MAX_VALUE);
+            } catch (IllegalArgumentException e) {
+                sendError(exchange, 400, e.getMessage());
+                return;
+            }
 
             int finalLimit = limit;
             int finalOffset = offset;

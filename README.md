@@ -318,13 +318,9 @@ jei-mcp/
 │   ├── tsconfig.json
 │   ├── dist/                          # Built output (gitignored)
 │   │   ├── index.js                   # MCP server (7 tools)
-│   │   ├── fuzz-test.js               # HTTP API fuzz tests (79 tests)
-│   │   ├── mcp-fuzz.js                # MCP protocol fuzz tests (36 tests)
 │   │   └── fetch-graph.js             # Full JEI graph crawler → JSON
 │   └── src/
 │       ├── index.ts                   # MCP server source
-│       ├── test.ts                    # Legacy MCP protocol tests
-│       ├── mock-bridge.ts             # Mock HTTP bridge for offline testing
 │       └── graph/                     # SQLite graph engine (offline)
 │           ├── db.js                  # SQLite connection, schema, FTS5
 │           ├── search.js              # BM25 search, item/recipe/use queries
@@ -332,6 +328,12 @@ jei-mcp/
 │           ├── context.js             # LLM context builder, trees
 │           ├── import.js              # JSON → SQLite importer
 │           └── query.js               # Interactive CLI (22 commands)
+├── test/
+│   └── fuzz/                          # Fuzz test suite (198 cases)
+│       ├── shared/                    # harness, state integration
+│       ├── jei/                       # HTTP + MCP fuzzers
+│       ├── master.mjs                 # runs all suites
+│       └── README.md
 ├── jei-graph/                         # Generated graph data (gitignored)
 ├── GRAPH-ENGINE.md                    # Graph engine documentation
 ├── .gitignore
@@ -340,56 +342,32 @@ jei-mcp/
 
 ## Testing
 
-### Fuzz Test Suites
+### Fuzz Test Suite (198 cases)
 
-Two independent test suites cover the full stack:
-
-| Suite | Target | Tests | File |
-|-------|--------|-------|------|
-| HTTP fuzz | Java mod HTTP API (`:18732`) | 79 | `server/dist/fuzz-test.js` |
-| MCP protocol | MCP server via JSON-RPC stdio | 36 | `server/dist/mcp-fuzz.js` |
-
-**Run them:**
 ```bash
 cd server
-node dist/fuzz-test.js    # HTTP API tests
-node dist/mcp-fuzz.js     # MCP protocol tests
+npm run test:fuzz
 ```
 
-### HTTP Fuzz Tests (79 tests)
+| Suite | Cases | Target |
+|-------|-------|--------|
+| JEI HTTP | 85 | Java mod HTTP API (`:18732`) |
+| JEI MCP | 90 | MCP server via JSON-RPC stdio |
+| State Integration | 23 | Cross-bridge workflow |
 
-| Category | Tests | Coverage |
-|----------|-------|----------|
-| Health | 4 | Status, runtime flag, item count |
-| Items count | 2 | Count matches health endpoint |
-| Search | 11 | Case-insensitive, multi-mod, limit, offset pagination, empty results |
-| Item detail | 11 | Valid items, metadata variants, modded items, invalid UIDs, ore dict, tooltip |
-| Recipes | 7 | Outputs, inputs, category UIDs, limit param, invalid items |
-| Uses | 6 | Consuming recipes, limit param, invalid items |
-| Categories | 9 | Count, known categories (crafting, smelting), category fields |
-| Edge cases | 11 | Special chars, unicode, XSS, SQL injection, path traversal, null bytes, long queries, negative offset, huge limits |
-| HTTP methods | 4 | POST/PUT/DELETE/PATCH rejected with 405 |
-| Performance | 3 | 20 parallel requests, 5 concurrent mixed endpoints |
-| Data consistency | 7 | Health/count match, search→detail consistency, recipe→category cross-reference |
+See `test/fuzz/README.md` for details, individual suite runners, and bug history.
 
-### MCP Protocol Tests (36 tests)
+### Unit Tests
 
-| Category | Tests | Coverage |
-|----------|-------|----------|
-| Protocol | 2 | Initialize handshake, server info |
-| Tool discovery | 8 | All 7 tools advertised, names match |
-| Health | 3 | Non-error, text content, status validation |
-| Search | 6 | Valid queries, cross-mod, empty results |
-| Item detail | 4 | Valid UIDs, modded items, invalid UIDs |
-| Recipes/uses | 4 | Valid items, non-error responses |
-| Categories | 3 | Non-error, content validation, known categories |
-| Pagination | 1 | Offset produces different results |
-| Edge cases | 4 | XSS-like, long queries, invalid UIDs, extra params |
-| Concurrency | 1 | 3 rapid parallel calls |
+```bash
+cd mod
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk ./gradlew test
+```
+
+10 tests covering `BridgeConfig`.
 
 ### Known Limitations
 
 - Empty search queries return HTTP 400 (correct behavior)
 - `recipes`/`uses` endpoints ignore the `limit` query parameter (returns all results)
-- Negative offset causes HTTP 500 from Java `List.subList` (unhandled edge case)
 - URL-encoded `&` in search queries (`%26`) triggers query string splitting (server uses decoded `getQuery()` not raw `getRawQuery()`)

@@ -51,9 +51,10 @@ public class JeiMcpBridgePlugin implements IModPlugin {
         LOG.info("JEI data cache built with {} items", dataCache.getTotalCount());
 
         try {
-            httpServer = new JeiHttpBridgeServer();
+            int port = BridgeConfig.get().getPort();
+            httpServer = new JeiHttpBridgeServer(port);
             httpServer.start();
-            LOG.info("JEI MCP Bridge HTTP server started on port {}", JeiHttpBridgeServer.PORT);
+            LOG.info("JEI MCP Bridge HTTP server started on port {}", port);
         } catch (Exception e) {
             LOG.error("Failed to start JEI MCP Bridge HTTP server", e);
         }

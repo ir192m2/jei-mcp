@@ -1,5 +1,7 @@
 import { getItem, getRecipes, getUses, countEdges } from "./search.js";
 
+const MAX_CACHE_SIZE = 5000;
+
 export class ContextBuilder {
   constructor(db, traverser) {
     this.db = db;
@@ -10,6 +12,10 @@ export class ContextBuilder {
   _getItem(uid) {
     if (this._itemCache.has(uid)) return this._itemCache.get(uid);
     const item = getItem(this.db, uid);
+    if (this._itemCache.size >= MAX_CACHE_SIZE) {
+      const firstKey = this._itemCache.keys().next().value;
+      this._itemCache.delete(firstKey);
+    }
     this._itemCache.set(uid, item);
     return item;
   }
@@ -44,8 +50,7 @@ export class ContextBuilder {
       for (const [cat, rs] of Object.entries(grouped).slice(0, 10)) {
         lines.push(`### ${cat}`);
         for (const r of rs.slice(0, 5)) {
-          const mult = r.multiplicity > 1 ? ` x${r.multiplicity}` : "";
-          lines.push(`- ${r.display_name} (${r.mod_id})${mult}`);
+          lines.push(`- ${r.display_name} (${r.mod_id})`);
         }
         if (rs.length > 5) lines.push(`  ... and ${rs.length - 5} more`);
       }

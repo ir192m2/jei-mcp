@@ -1,212 +1,207 @@
+function escapeSqlString(s) {
+  return String(s).replace(/'/g, "''");
+}
+
+function buildCatClause(categoryFilter) {
+  return categoryFilter ? ` AND e.category = '${escapeSqlString(categoryFilter)}'` : "";
+}
+
 export class GraphTraverser {
   constructor(db) {
     this.db = db;
-    this._adjOut = null;
-    this._adjIn = null;
   }
 
-  _buildAdjacency() {
-    if (this._adjOut) return;
-    this._adjOut = new Map();
-    this._adjIn = new Map();
-    const edges = this.db.prepare("SELECT source, target, category FROM edges").all();
-    for (const e of edges) {
-      if (!this._adjOut.has(e.source)) this._adjOut.set(e.source, []);
-      this._adjOut.get(e.source).push({ to: e.target, category: e.category });
-      if (!this._adjIn.has(e.target)) this._adjIn.set(e.target, []);
-      this._adjIn.get(e.target).push({ from: e.source, category: e.category });
+  _iterativeBfs(startUid, options, direction) {
+    const { maxDepth = 3, maxNodes = 500, categoryFilter = null } = options;
+    if (!startUid) return [];
+    const catClause = buildCatClause(categoryFilter);
+    const sourceCol = direction === "in" ? "target" : "source";
+    const neighborCol = direction === "in" ? "source" : "target";
+
+    const seen = new Map();
+    seen.set(startUid, 0);
+    let frontier = [startUid];
+
+    for (let d = 0; d <= maxDepth && frontier.length > 0; d++) {
+      if (seen.size >= maxNodes) break;
+      const placeholders = frontier.map(() => "?").join(",");
+      const sql = `
+        SELECT DISTINCT ${neighborCol} as uid
+        FROM edges
+        WHERE ${sourceCol} IN (${placeholders})${catClause}
+      `;
+      let next;
+      try {
+        next = this.db.prepare(sql).all(...frontier);
+      } catch (e) {
+        throw new Error(`BFS query at depth ${d} failed: ${e.message}`);
+      }
+      const newFrontier = [];
+      for (const { uid } of next) {
+        if (!seen.has(uid)) {
+          seen.set(uid, d + 1);
+          newFrontier.push(uid);
+          if (seen.size >= maxNodes) break;
+        }
+      }
+      frontier = newFrontier;
     }
+
+    const result = [...seen.entries()].map(([uid, depth]) => ({ uid, depth }));
+    result.sort((a, b) => a.depth - b.depth || (a.uid < b.uid ? -1 : 1));
+    return result;
   }
 
   traverseBFS(startUid, options = {}) {
-    this._buildAdjacency();
-    const { maxDepth = 3, edgeFilter = null, maxNodes = 500 } = options;
-    const visited = new Set();
-    const result = [];
-    const queue = [{ uid: startUid, depth: 0 }];
-    visited.add(startUid);
-
-    while (queue.length > 0 && result.length < maxNodes) {
-      const { uid, depth } = queue.shift();
-      if (depth > maxDepth) continue;
-      result.push({ uid, depth });
-      const neighbors = this._adjOut.get(uid) || [];
-      for (const { to, category } of neighbors) {
-        if (visited.has(to)) continue;
-        if (edgeFilter && !edgeFilter(category)) continue;
-        visited.add(to);
-        queue.push({ uid: to, depth: depth + 1 });
-      }
-    }
-    return result;
+    return this._iterativeBfs(startUid, options, "out");
   }
 
   traverseDFS(startUid, options = {}) {
-    this._buildAdjacency();
-    const { maxDepth = 3, edgeFilter = null, maxNodes = 500 } = options;
-    const visited = new Set();
-    const result = [];
-
-    const dfs = (uid, depth) => {
-      if (depth > maxDepth || visited.has(uid) || result.length >= maxNodes) return;
-      visited.add(uid);
-      result.push({ uid, depth });
-      const neighbors = this._adjOut.get(uid) || [];
-      for (const { to, category } of neighbors) {
-        if (edgeFilter && !edgeFilter(category)) continue;
-        dfs(to, depth + 1);
-      }
-    };
-
-    dfs(startUid, 0);
-    return result;
+    return this._iterativeBfs(startUid, options, "out");
   }
 
   findPath(fromUid, toUid, options = {}) {
-    this._buildAdjacency();
-    const { maxDepth = 10, edgeFilter = null } = options;
+    const { maxDepth = 10, categoryFilter = null } = options;
+    if (!fromUid || !toUid) return null;
+    if (fromUid === toUid) return [fromUid];
+    const catClause = buildCatClause(categoryFilter);
+
     const visited = new Map();
     const parent = new Map();
-    const queue = [{ uid: fromUid, depth: 0 }];
     visited.set(fromUid, 0);
+    let frontier = [fromUid];
 
-    while (queue.length > 0) {
-      const { uid, depth } = queue.shift();
-      if (uid === toUid) {
-        const path = [];
-        let cur = toUid;
-        while (cur !== undefined) { path.unshift(cur); cur = parent.get(cur); }
-        return path;
+    for (let d = 0; d < maxDepth; d++) {
+      if (frontier.length === 0) return null;
+      const placeholders = frontier.map(() => "?").join(",");
+      const sql = `
+        SELECT DISTINCT target as uid, source as src
+        FROM edges
+        WHERE source IN (${placeholders})${catClause}
+      `;
+      let next;
+      try {
+        next = this.db.prepare(sql).all(...frontier);
+      } catch (e) {
+        throw new Error(`Path query at depth ${d} failed: ${e.message}`);
       }
-      if (depth >= maxDepth) continue;
-      const neighbors = this._adjOut.get(uid) || [];
-      for (const { to, category } of neighbors) {
-        if (edgeFilter && !edgeFilter(category)) continue;
-        if (visited.has(to)) continue;
-        visited.set(to, depth + 1);
-        parent.set(to, uid);
-        queue.push({ uid: to, depth: depth + 1 });
+      const newFrontier = [];
+      for (const { uid, src } of next) {
+        if (!visited.has(uid)) {
+          visited.set(uid, d + 1);
+          parent.set(uid, src);
+          newFrontier.push(uid);
+          if (uid === toUid) {
+            const path = [uid];
+            let cur = uid;
+            while (parent.has(cur)) {
+              cur = parent.get(cur);
+              path.unshift(cur);
+            }
+            return path;
+          }
+        }
       }
+      frontier = newFrontier;
     }
     return null;
   }
 
   getSubgraph(startUid, options = {}) {
-    this._buildAdjacency();
-    const { maxDepth = 2, direction = "both", edgeFilter = null, maxNodes = 100 } = options;
-    const visited = new Set();
-    const nodes = new Set();
-    const edges = [];
+    const { maxDepth = 2, direction = "both", categoryFilter = null, maxNodes = 100 } = options;
+    if (!startUid) return { nodes: [], edges: [] };
 
-    const expand = (uid, depth) => {
-      if (depth > maxDepth || visited.has(uid) || nodes.size >= maxNodes) return;
-      visited.add(uid);
-      nodes.add(uid);
-
-      if (direction === "out" || direction === "both") {
-        for (const { to, category } of (this._adjOut.get(uid) || [])) {
-          if (edgeFilter && !edgeFilter(category)) continue;
-          edges.push({ source: uid, target: to, category });
-          expand(to, depth + 1);
-        }
+    const nodeUids = new Set([startUid]);
+    if (direction === "out" || direction === "both") {
+      for (const n of this._iterativeBfs(startUid, { maxDepth, maxNodes, categoryFilter }, "out")) {
+        nodeUids.add(n.uid);
       }
-      if (direction === "in" || direction === "both") {
-        for (const { from, category } of (this._adjIn.get(uid) || [])) {
-          if (edgeFilter && !edgeFilter(category)) continue;
-          edges.push({ source: from, target: uid, category });
-          expand(from, depth + 1);
-        }
+    }
+    if (direction === "in" || direction === "both") {
+      for (const n of this._iterativeBfs(startUid, { maxDepth, maxNodes, categoryFilter }, "in")) {
+        nodeUids.add(n.uid);
       }
-    };
+    }
 
-    expand(startUid, 0);
-    return { nodes: [...nodes], edges };
+    const nodeList = [...nodeUids];
+    if (nodeList.length === 0) return { nodes: [], edges: [] };
+    const placeholders = nodeList.map(() => "?").join(",");
+    const catClause = buildCatClause(categoryFilter);
+    const edgeSql = `SELECT source, target, category FROM edges WHERE source IN (${placeholders}) AND target IN (${placeholders})${catClause}`;
+    let edges = [];
+    try {
+      edges = this.db.prepare(edgeSql).all(...nodeList, ...nodeList);
+    } catch (e) {
+      throw new Error(`Subgraph edge query failed: ${e.message}`);
+    }
+    return { nodes: nodeList, edges };
   }
 
   getAncestors(uid, maxDepth = 10) {
-    this._buildAdjacency();
-    const ancestors = [];
-    const visited = new Set();
-    const queue = [{ uid, depth: 0 }];
-    while (queue.length > 0) {
-      const { uid: current, depth } = queue.shift();
-      if (depth > maxDepth || visited.has(current)) continue;
-      visited.add(current);
-      if (depth > 0) ancestors.push({ uid: current, depth });
-      for (const { from } of (this._adjIn.get(current) || [])) {
-        queue.push({ uid: from, depth: depth + 1 });
-      }
-    }
-    return ancestors;
+    if (!uid) return [];
+    const all = this._iterativeBfs(uid, { maxDepth, maxNodes: 10000 }, "in");
+    return all.filter((n) => n.uid !== uid);
   }
 
   getDescendants(uid, maxDepth = 10) {
-    this._buildAdjacency();
-    const descendants = [];
-    const visited = new Set();
-    const queue = [{ uid, depth: 0 }];
-    while (queue.length > 0) {
-      const { uid: current, depth } = queue.shift();
-      if (depth > maxDepth || visited.has(current)) continue;
-      visited.add(current);
-      if (depth > 0) descendants.push({ uid: current, depth });
-      for (const { to } of (this._adjOut.get(current) || [])) {
-        queue.push({ uid: to, depth: depth + 1 });
-      }
-    }
-    return descendants;
+    if (!uid) return [];
+    const all = this._iterativeBfs(uid, { maxDepth, maxNodes: 10000 }, "out");
+    return all.filter((n) => n.uid !== uid);
   }
 
-  detectCycles() {
-    this._buildAdjacency();
-    const WHITE = 0, GRAY = 1, BLACK = 2;
-    const color = new Map();
-    const parent = new Map();
+  detectCycles(maxNodes = 1000, maxCycles = 100, perNodeDegreeCap = 5000) {
     const cycles = [];
+    const startNodes = this.db.prepare("SELECT DISTINCT source FROM edges LIMIT ?").all(maxNodes);
 
-    for (const node of this._adjOut.keys()) {
-      if (color.has(node)) continue;
-      const stack = [node];
+    for (const { source } of startNodes) {
+      const inStack = new Set([source]);
+      const localParent = new Map();
+      const stack = [{ uid: source, iter: 0, neighbors: this._neighborsOf(source, perNodeDegreeCap) }];
+      const localVisited = new Set([source]);
+
       while (stack.length > 0) {
-        const u = stack[stack.length - 1];
-        if (!color.has(u)) color.set(u, WHITE);
-        if (color.get(u) === WHITE) {
-          color.set(u, GRAY);
-          for (const { to } of (this._adjOut.get(u) || [])) {
-            if (!color.has(to)) {
-              parent.set(to, u);
-              stack.push(to);
-            } else if (color.get(to) === GRAY) {
-              const cycle = [to];
-              let cur = u;
-              while (cur !== to) { cycle.unshift(cur); cur = parent.get(cur); }
-              cycle.unshift(to);
-              cycles.push(cycle);
-            }
-          }
-        } else {
-          color.set(u, BLACK);
+        const top = stack[stack.length - 1];
+        if (top.iter >= top.neighbors.length) {
+          inStack.delete(top.uid);
           stack.pop();
+          continue;
+        }
+        const { target } = top.neighbors[top.iter++];
+        if (inStack.has(target)) {
+          const cycle = [target];
+          let cur = top.uid;
+          while (cur !== target) {
+            cycle.unshift(cur);
+            cur = localParent.get(cur);
+            if (cur === undefined) break;
+          }
+          cycle.unshift(target);
+          cycles.push(cycle);
+          if (cycles.length >= maxCycles) return cycles;
+        } else if (!localVisited.has(target)) {
+          localVisited.add(target);
+          localParent.set(target, top.uid);
+          inStack.add(target);
+          stack.push({ uid: target, iter: 0, neighbors: this._neighborsOf(target, perNodeDegreeCap) });
         }
       }
+      if (cycles.length >= maxCycles) break;
     }
     return cycles;
   }
 
+  _neighborsOf(uid, cap) {
+    const rows = this.db.prepare(
+      "SELECT target FROM edges WHERE source = ? LIMIT ?"
+    ).all(uid, cap);
+    return rows;
+  }
+
   impactAnalysis(uid) {
-    this._buildAdjacency();
-    const impacted = new Set();
-    const queue = [uid];
-    while (queue.length > 0) {
-      const current = queue.shift();
-      for (const { from } of (this._adjIn.get(current) || [])) {
-        if (!impacted.has(from)) {
-          impacted.add(from);
-          queue.push(from);
-        }
-      }
-    }
-    return [...impacted];
+    if (!uid) return [];
+    return this._iterativeBfs(uid, { maxDepth: 100, maxNodes: 100000 }, "in")
+      .filter((n) => n.uid !== uid)
+      .map((n) => n.uid);
   }
 
   criticalPath(startUid, endUid) {

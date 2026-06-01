@@ -1,8 +1,7 @@
 import { createInterface } from "node:readline";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getDb, initSchema, closeDb } from "./db.js";
+import { getDb, initSchema, closeDb, validateGraph } from "./db.js";
 import {
   searchItems, searchEdges, getItem, getRecipes, getUses,
   getModStats, getCategoryStats, getTopConnected,
@@ -12,25 +11,22 @@ import { GraphTraverser } from "./traversal.js";
 import { ContextBuilder } from "./context.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-let _rawEdges = null;
-function getRawEdges() {
-  if (!_rawEdges) {
-    const p = join(__dirname, "../../../jei-graph/edges.json");
-    _rawEdges = JSON.parse(readFileSync(p, "utf-8"));
-  }
-  return _rawEdges;
-}
 
 const db = getDb();
-initSchema(db);
+const validation = validateGraph(db);
+if (!validation.ok) {
+  console.warn("[WARN] Graph integrity issues:");
+  for (const i of validation.issues) console.warn("  -", i);
+  console.warn(`  stats: ${JSON.stringify(validation.stats)}`);
+}
 const traverser = new GraphTraverser(db);
 const context = new ContextBuilder(db, traverser);
 
 const totalItems = countItems(db);
-const edgeCounts = countEdges(db);
+const edgeCount = countEdges(db).raw;
 const totalMods = countMods(db);
 
-console.log(`JEI Recipe Graph — ${totalItems} items, ${edgeCounts.unique} unique edges (${edgeCounts.total} raw), ${totalMods} mods\n`);
+console.log(`JEI Recipe Graph — ${totalItems} items, ${edgeCount} edges, ${totalMods} mods\n`);
 console.log("Commands:");
 console.log("  search <query>                — FTS search items (BM25 ranked)");
 console.log("  info <uid>                    — Item details");
@@ -133,15 +129,14 @@ function prompt() {
           const limit = parseInt(arg2) || 30;
           const recipes = getRecipes(db, uid, limit);
           printTable(recipes.map(r => ({
-            uid: r.uid, name: r.display_name, mod: r.mod_id, cat: r.category, n: r.multiplicity,
+            uid: r.uid, name: r.display_name, mod: r.mod_id, cat: r.category,
           })), [
             { label: "Output", key: "uid" },
             { label: "Name", key: "name" },
             { label: "Mod", key: "mod" },
             { label: "Category", key: "cat" },
-            { label: "N", key: "n" },
           ]);
-          console.log(`\n  ${recipes.length} unique recipes`);
+          console.log(`\n  ${recipes.length} recipes`);
           break;
         }
         case "uses":
@@ -151,15 +146,14 @@ function prompt() {
           const limit = parseInt(arg2) || 30;
           const uses = getUses(db, uid, limit);
           printTable(uses.map(r => ({
-            uid: r.uid, name: r.display_name, mod: r.mod_id, cat: r.category, n: r.multiplicity,
+            uid: r.uid, name: r.display_name, mod: r.mod_id, cat: r.category,
           })), [
             { label: "Input", key: "uid" },
             { label: "Name", key: "name" },
             { label: "Mod", key: "mod" },
             { label: "Category", key: "cat" },
-            { label: "N", key: "n" },
           ]);
-          console.log(`\n  ${uses.length} unique uses`);
+          console.log(`\n  ${uses.length} uses`);
           break;
         }
         case "bfs": {
@@ -372,8 +366,7 @@ function prompt() {
             const cats = getCategoryStats(db, parseInt(arg2) || 20);
             printTable(cats, [
               { label: "Category", key: "category" },
-              { label: "Recipes", key: "total_recipes" },
-              { label: "Pairs", key: "unique_pairs" },
+              { label: "Edges", key: "edge_count" },
             ]);
           } else {
             const edges = db.prepare("SELECT source, target FROM edges WHERE category = ? LIMIT ?").all(arg1, parseInt(arg2) || 20);
@@ -390,52 +383,67 @@ function prompt() {
           break;
         }
         case "raw": {
-          if (!arg1) { console.log("Usage: raw <uid> — show raw edges from JSON (with duplicates)"); break; }
+          if (!arg1) { console.log("Usage: raw <uid> — show raw edges (with multiplicity)"); break; }
           const uid = resolveUid(arg1);
-          const raw = getRawEdges();
-          const matching = raw.filter(e => e[0] === uid || e[1] === uid);
-          const grouped = {};
-          for (const [s, t, c] of matching) {
-            const dir = s === uid ? "produces" : "consumed_by";
-            const other = s === uid ? t : s;
-            const key = dir + "|" + c;
-            if (!grouped[key]) grouped[key] = { dir, category: c, targets: new Map() };
-            grouped[key].targets.set(other, (grouped[key].targets.get(other) || 0) + 1);
-          }
+          const outEdges = db.prepare(`
+            SELECT target as other, category, COUNT(*) as mult
+            FROM edges WHERE source = ?
+            GROUP BY target, category ORDER BY mult DESC, target LIMIT 100
+          `).all(uid);
+          const inEdges = db.prepare(`
+            SELECT source as other, category, COUNT(*) as mult
+            FROM edges WHERE target = ?
+            GROUP BY source, category ORDER BY mult DESC, source LIMIT 100
+          `).all(uid);
           const item = getItem(db, uid);
+          const totalMult = outEdges.reduce((a, e) => a + e.mult, 0) + inEdges.reduce((a, e) => a + e.mult, 0);
           console.log(`  Raw edges for ${item?.display_name || uid} (${uid}):`);
-          console.log(`  ${matching.length} raw edges total\n`);
-          for (const g of Object.values(grouped).sort((a, b) => b.targets.size - a.targets.size).slice(0, 15)) {
-            const dirLabel = g.dir === "produces" ? "PRODUCES" : "USED BY";
-            console.log(`  ${dirLabel} [${g.category}] (${g.targets.size} unique):`);
-            const sorted = [...g.targets.entries()].sort((a, b) => b[1] - a[1]);
-            for (const [target, count] of sorted.slice(0, 5)) {
-              const tItem = getItem(db, target);
-              const mult = count > 1 ? ` x${count}` : "";
-              console.log(`    ${tItem?.display_name || target} (${target})${mult}`);
+          console.log(`  ${totalMult} edges (${outEdges.length} out, ${inEdges.length} in)\n`);
+          const groupedOut = {};
+          for (const e of outEdges) {
+            if (!groupedOut[e.category]) groupedOut[e.category] = [];
+            groupedOut[e.category].push(e);
+          }
+          for (const [cat, list] of Object.entries(groupedOut).slice(0, 10)) {
+            const totalMult = list.reduce((a, e) => a + e.mult, 0);
+            console.log(`  PRODUCES [${cat}] (${list.length} unique, ${totalMult} total):`);
+            for (const e of list.slice(0, 5)) {
+              const tItem = getItem(db, e.other);
+              console.log(`    ${tItem?.display_name || e.other} (${e.other})${e.mult > 1 ? ` x${e.mult}` : ""}`);
             }
-            if (sorted.length > 5) console.log(`    ... and ${sorted.length - 5} more`);
+            if (list.length > 5) console.log(`    ... and ${list.length - 5} more`);
+          }
+          const groupedIn = {};
+          for (const e of inEdges) {
+            if (!groupedIn[e.category]) groupedIn[e.category] = [];
+            groupedIn[e.category].push(e);
+          }
+          for (const [cat, list] of Object.entries(groupedIn).slice(0, 10)) {
+            const totalMult = list.reduce((a, e) => a + e.mult, 0);
+            console.log(`  USED BY [${cat}] (${list.length} unique, ${totalMult} total):`);
+            for (const e of list.slice(0, 5)) {
+              const tItem = getItem(db, e.other);
+              console.log(`    ${tItem?.display_name || e.other} (${e.other})${e.mult > 1 ? ` x${e.mult}` : ""}`);
+            }
+            if (list.length > 5) console.log(`    ... and ${list.length - 5} more`);
           }
           break;
         }
         case "dups": {
-          const raw = getRawEdges();
-          const multMap = new Map();
-          for (const [s, t, c] of raw) {
-            const key = s + "\0" + t + "\0" + c;
-            multMap.set(key, (multMap.get(key) || 0) + 1);
-          }
-          const duped = [...multMap.entries()]
-            .filter(([, m]) => m > 1)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, parseInt(arg1) || 20);
-          printTable(duped.map(([key, mult]) => {
-            const [s, t, c] = key.split("\0");
-            const sItem = getItem(db, s);
-            const tItem = getItem(db, t);
+          const duped = db.prepare(`
+            SELECT source, target, category, COUNT(*) as mult
+            FROM edges
+            GROUP BY source, target, category
+            HAVING mult > 1
+            ORDER BY mult DESC
+            LIMIT ?
+          `).all(parseInt(arg1) || 20);
+          printTable(duped.map(d => {
+            const sItem = getItem(db, d.source);
+            const tItem = getItem(db, d.target);
             return {
-              from: sItem?.display_name || s, to: tItem?.display_name || t,
-              cat: c, n: mult,
+              from: sItem?.display_name || d.source, to: tItem?.display_name || d.target,
+              cat: d.category, n: d.mult,
             };
           }), [
             { label: "From", key: "from" },
@@ -464,13 +472,13 @@ function prompt() {
           const top = getTopConnected(db, 5);
           const mods = getModStats(db, 5);
           const cats = getCategoryStats(db, 5);
-          console.log(`  Items: ${totalItems} | Edges: ${edgeCounts.unique} unique (${edgeCounts.total} raw) | Mods: ${totalMods}`);
+          console.log(`  Items: ${totalItems} | Edges: ${edgeCount} | Mods: ${totalMods}`);
           console.log(`  Top 5 connected:`);
           for (const t of top) console.log(`    ${t.display_name} (${t.mod_id}): ${t.total} edges`);
           console.log(`  Top 5 mods:`);
           for (const m of mods) console.log(`    ${m.mod_id}: ${m.item_count} items, ${m.recipe_count} recipes`);
           console.log(`  Top 5 categories:`);
-          for (const c of cats) console.log(`    ${c.category}: ${c.total_recipes} recipes (${c.unique_pairs} unique pairs)`);
+          for (const c of cats) console.log(`    ${c.category}: ${c.edge_count} edges`);
           break;
         }
         case "quit":

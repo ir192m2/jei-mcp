@@ -7,7 +7,10 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/index.ts",
+    "graph:import": "node src/graph/import.js",
+    "graph:query": "node src/graph/query.js",
+    "graph:fetch": "node dist/fetch-graph.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0"

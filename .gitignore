@@ -11,10 +11,8 @@ mod/out/
 mod/run/
 *.class
 
-# Graph engine (generated — rebuild with: node server/src/graph/import.js)
-jei-graph/graph.db
-jei-graph/graph.db-wal
-jei-graph/graph.db-shm
+# Graph data (generated — rebuild with: node server/src/graph/import.js)
+jei-graph/
 
 # OS
 .DS_Store

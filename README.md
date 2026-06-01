@@ -144,11 +144,7 @@ node src/graph/query.js
 
 ### Graph Stats
 
-- 21,319 items across 55 mods
-- 31,050 unique recipe edges (135,208 raw with multiplicities)
-- 123 recipe categories
-- Top mod: hbm (5,546 items)
-- Most connected: Tiny Pile of Xenon-135 Powder (1,360 edges)
+Stats vary by modpack. After running `fetch-graph.js` + `import.js`, use the `stats` command to see yours.
 
 ## MCP Tools
 
@@ -336,13 +332,7 @@ jei-mcp/
 │           ├── context.js             # LLM context builder, trees
 │           ├── import.js              # JSON → SQLite importer
 │           └── query.js               # Interactive CLI (22 commands)
-├── jei-graph/                         # Graph data (generated)
-│   ├── items.json                     # 2.5 MB — all items
-│   ├── edges.json                     # 9.2 MB — all edges (with duplicates)
-│   ├── adjacency.json                 # 6.3 MB — adjacency list
-│   ├── stats.json                     # 12 KB — graph statistics
-│   ├── schema.graphql                 # 821 B — GraphQL schema
-│   └── graph.db                       # 18 MB — SQLite (gitignored)
+├── jei-graph/                         # Generated graph data (gitignored)
 ├── GRAPH-ENGINE.md                    # Graph engine documentation
 ├── .gitignore
 └── README.md

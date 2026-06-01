@@ -2,13 +2,17 @@
 
 Bridges [Just Enough Items (JEI)](https://github.com/mezz/JustEnoughItems) (1.12.2) to [Model Context Protocol (MCP)](https://modelcontextprotocol.io), allowing AI assistants (KiloCode, Claude, etc.) to query live Minecraft item and recipe data from a running game instance.
 
+Includes a **local SQLite graph engine** that indexes all 21K items and 31K recipe relationships with FTS5 search, BFS/DFS traversal, shortest path, cycle detection, and impact analysis — works fully offline without the JVM.
+
 ## Architecture
 
 ```
-KiloCode ──MCP stdio──> jei-mcp-server (TypeScript) ──HTTP 127.0.0.1:18732──> Minecraft Client (Forge mod + JEI)
+Live mode:    KiloCode ──MCP stdio──> jei-mcp-server ──HTTP :18732──> Minecraft (Forge mod + JEI)
+
+Offline mode: KiloCode ──CLI──────> query.js ──SQLite──> jei-graph/graph.db (21K items, 31K edges)
 ```
 
-Two components:
+Three components:
 
 ### 1. `mod/` — Forge 1.12.2 Client Mod
 
@@ -26,6 +30,18 @@ An MCP stdio server that:
 - Provides 7 tools that proxy requests to the in-game HTTP server
 - Handles connection errors gracefully when Minecraft isn't running
 - Uses Zod schema validation for all tool parameters
+
+### 3. `server/src/graph/` — SQLite Graph Engine (offline)
+
+A local SQLite-backed recipe graph that works fully offline — no JVM required:
+- `db.js` — SQLite connection with WAL mode, FTS5 full-text search
+- `search.js` — BM25 ranked search, item/recipe/use queries
+- `traversal.js` — BFS, DFS, shortest path, subgraph extraction, ancestors/descendants, cycle detection, impact analysis
+- `context.js` — LLM-ready context builder, dependency trees
+- `import.js` — JSON → SQLite importer (runs in ~0.6s)
+- `query.js` — Interactive CLI with 22 commands
+
+Built on graph algorithms adapted from [CodeGraph](https://github.com/colbymchenry/codegraph).
 
 ## Setup
 
@@ -84,6 +100,55 @@ The HTTP server starts on `127.0.0.1:18732` automatically. You can verify it's r
 curl http://127.0.0.1:18732/api/health
 # {"status":"ok","jei_runtime":true,"item_count":22277}
 ```
+
+## Graph Engine (Offline)
+
+Query the full recipe graph without running Minecraft. Data is fetched once via the HTTP bridge, then stored in SQLite.
+
+```bash
+# 1. Fetch graph data (requires running Minecraft + JEI bridge)
+cd server && node dist/fetch-graph.js
+
+# 2. Import into SQLite (~0.6s)
+node src/graph/import.js
+
+# 3. Interactive query tool (no JVM needed)
+node src/graph/query.js
+```
+
+### Graph Engine Commands
+
+| Command | Description |
+|---------|-------------|
+| `search <query>` | FTS5 search with BM25 ranking. `mod:xxx` filter. |
+| `info <uid>` | Item details (name, mod, recipe/use counts) |
+| `recipes <uid>` | What this item produces (with multiplicity) |
+| `uses <uid>` | What makes this item (with multiplicity) |
+| `bfs <uid> [depth]` | Breadth-first expansion |
+| `dfs <uid> [depth]` | Depth-first expansion |
+| `path <from> <to>` | Shortest recipe path (BFS) |
+| `subgraph <uid> [depth]` | Extract recipe subgraph |
+| `ancestors <uid>` | Walk up dependency tree |
+| `descendants <uid>` | Walk down dependency tree |
+| `impact <uid>` | Impact analysis (what breaks if this item changes) |
+| `cycles` | Detect recipe cycles |
+| `context <uid> [depth]` | Build LLM-ready context |
+| `tree <uid> [depth]` | Dependency tree |
+| `summary <uid>` | Quick item summary |
+| `raw <uid>` | Raw edges from JSON (shows duplicates) |
+| `dups [limit]` | Most duplicated edges |
+| `mod [modId]` | Mod stats or items in mod |
+| `category [name]` | Category stats |
+| `top [limit]` | Most connected items |
+| `stats` | Overview |
+
+### Graph Stats
+
+- 21,319 items across 55 mods
+- 31,050 unique recipe edges (135,208 raw with multiplicities)
+- 123 recipe categories
+- Top mod: hbm (5,546 items)
+- Most connected: Tiny Pile of Xenon-135 Powder (1,360 edges)
 
 ## MCP Tools
 
@@ -255,14 +320,30 @@ jei-mcp/
 ├── server/
 │   ├── package.json
 │   ├── tsconfig.json
-│   ├── dist/
+│   ├── dist/                          # Built output (gitignored)
 │   │   ├── index.js                   # MCP server (7 tools)
 │   │   ├── fuzz-test.js               # HTTP API fuzz tests (79 tests)
-│   │   └── mcp-fuzz.js                # MCP protocol fuzz tests (36 tests)
+│   │   ├── mcp-fuzz.js                # MCP protocol fuzz tests (36 tests)
+│   │   └── fetch-graph.js             # Full JEI graph crawler → JSON
 │   └── src/
 │       ├── index.ts                   # MCP server source
 │       ├── test.ts                    # Legacy MCP protocol tests
-│       └── mock-bridge.ts             # Mock HTTP bridge for offline testing
+│       ├── mock-bridge.ts             # Mock HTTP bridge for offline testing
+│       └── graph/                     # SQLite graph engine (offline)
+│           ├── db.js                  # SQLite connection, schema, FTS5
+│           ├── search.js              # BM25 search, item/recipe/use queries
+│           ├── traversal.js           # BFS, DFS, path, cycles, impact
+│           ├── context.js             # LLM context builder, trees
+│           ├── import.js              # JSON → SQLite importer
+│           └── query.js               # Interactive CLI (22 commands)
+├── jei-graph/                         # Graph data (generated)
+│   ├── items.json                     # 2.5 MB — all items
+│   ├── edges.json                     # 9.2 MB — all edges (with duplicates)
+│   ├── adjacency.json                 # 6.3 MB — adjacency list
+│   ├── stats.json                     # 12 KB — graph statistics
+│   ├── schema.graphql                 # 821 B — GraphQL schema
+│   └── graph.db                       # 18 MB — SQLite (gitignored)
+├── GRAPH-ENGINE.md                    # Graph engine documentation
 ├── .gitignore
 └── README.md
 ```

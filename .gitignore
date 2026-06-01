@@ -1,13 +1,20 @@
 # MCP server
 server/node_modules/
 server/dist/
+server/package-lock.json
 
 # Forge mod
 mod/build/
 mod/.gradle/
 mod/bin/
 mod/out/
+mod/run/
 *.class
+
+# Graph engine (generated — rebuild with: node server/src/graph/import.js)
+jei-graph/graph.db
+jei-graph/graph.db-wal
+jei-graph/graph.db-shm
 
 # OS
 .DS_Store

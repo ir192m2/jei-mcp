@@ -239,16 +239,86 @@ All endpoints return JSON. Errors return `{ "error": "message" }` with appropria
 | Empty recipe results | Item may not have recipes in JEI (creative-only items) |
 | MCP server won't start | Ensure `npm run build` completed successfully, check Node.js version |
 
-## Fuzz Test Results
+## File Structure
 
-The HTTP API was fuzz-tested with 47 tests covering:
-- Valid searches (case-insensitive, partial, mod-specific)
-- Special characters and long queries
-- Pagination boundaries (offset beyond total, large limit)
-- Wildcard UIDs (`minecraft:planks`, `minecraft:wool`)
-- Metadata UIDs (`minecraft:wool:0`)
-- Invalid/missing resources (proper 404 errors)
-- HTTP method validation (GET-only enforced)
-- Empty queries (proper 400 errors)
+```
+jei-mcp/
+├── mod/
+│   ├── build.gradle                   # RetroFuturaGradle 1.3.x, JEI via CurseMaven
+│   ├── settings.gradle
+│   ├── gradlew
+│   └── src/main/java/com/jeimcp/bridge/
+│       ├── JeiMcpBridgePlugin.java   # @JEIPlugin, captures runtime + registry
+│       ├── JeiDataCache.java          # O(1) UID lookup, search, sorted items
+│       └── http/
+│           └── JeiHttpBridgeServer.java  # 8 HTTP handlers
+├── server/
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── dist/
+│   │   ├── index.js                   # MCP server (7 tools)
+│   │   ├── fuzz-test.js               # HTTP API fuzz tests (79 tests)
+│   │   └── mcp-fuzz.js                # MCP protocol fuzz tests (36 tests)
+│   └── src/
+│       ├── index.ts                   # MCP server source
+│       ├── test.ts                    # Legacy MCP protocol tests
+│       └── mock-bridge.ts             # Mock HTTP bridge for offline testing
+├── .gitignore
+└── README.md
+```
 
-**Result: 0 failures, 47/47 passed.**
+## Testing
+
+### Fuzz Test Suites
+
+Two independent test suites cover the full stack:
+
+| Suite | Target | Tests | File |
+|-------|--------|-------|------|
+| HTTP fuzz | Java mod HTTP API (`:18732`) | 79 | `server/dist/fuzz-test.js` |
+| MCP protocol | MCP server via JSON-RPC stdio | 36 | `server/dist/mcp-fuzz.js` |
+
+**Run them:**
+```bash
+cd server
+node dist/fuzz-test.js    # HTTP API tests
+node dist/mcp-fuzz.js     # MCP protocol tests
+```
+
+### HTTP Fuzz Tests (79 tests)
+
+| Category | Tests | Coverage |
+|----------|-------|----------|
+| Health | 4 | Status, runtime flag, item count |
+| Items count | 2 | Count matches health endpoint |
+| Search | 11 | Case-insensitive, multi-mod, limit, offset pagination, empty results |
+| Item detail | 11 | Valid items, metadata variants, modded items, invalid UIDs, ore dict, tooltip |
+| Recipes | 7 | Outputs, inputs, category UIDs, limit param, invalid items |
+| Uses | 6 | Consuming recipes, limit param, invalid items |
+| Categories | 9 | Count, known categories (crafting, smelting), category fields |
+| Edge cases | 11 | Special chars, unicode, XSS, SQL injection, path traversal, null bytes, long queries, negative offset, huge limits |
+| HTTP methods | 4 | POST/PUT/DELETE/PATCH rejected with 405 |
+| Performance | 3 | 20 parallel requests, 5 concurrent mixed endpoints |
+| Data consistency | 7 | Health/count match, search→detail consistency, recipe→category cross-reference |
+
+### MCP Protocol Tests (36 tests)
+
+| Category | Tests | Coverage |
+|----------|-------|----------|
+| Protocol | 2 | Initialize handshake, server info |
+| Tool discovery | 8 | All 7 tools advertised, names match |
+| Health | 3 | Non-error, text content, status validation |
+| Search | 6 | Valid queries, cross-mod, empty results |
+| Item detail | 4 | Valid UIDs, modded items, invalid UIDs |
+| Recipes/uses | 4 | Valid items, non-error responses |
+| Categories | 3 | Non-error, content validation, known categories |
+| Pagination | 1 | Offset produces different results |
+| Edge cases | 4 | XSS-like, long queries, invalid UIDs, extra params |
+| Concurrency | 1 | 3 rapid parallel calls |
+
+### Known Limitations
+
+- Empty search queries return HTTP 400 (correct behavior)
+- `recipes`/`uses` endpoints ignore the `limit` query parameter (returns all results)
+- Negative offset causes HTTP 500 from Java `List.subList` (unhandled edge case)
+- URL-encoded `&` in search queries (`%26`) triggers query string splitting (server uses decoded `getQuery()` not raw `getRawQuery()`)

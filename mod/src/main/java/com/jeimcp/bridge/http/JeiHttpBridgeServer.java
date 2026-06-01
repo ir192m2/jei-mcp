@@ -32,6 +32,7 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -88,7 +89,7 @@ public class JeiHttpBridgeServer {
 
     private static void sendJson(HttpExchange exchange, Object data) throws IOException {
         String json = GSON.toJson(data);
-        byte[] bytes = json.getBytes("UTF-8");
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
         exchange.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
         exchange.sendResponseHeaders(200, bytes.length);
@@ -101,7 +102,7 @@ public class JeiHttpBridgeServer {
         Map<String, Object> err = new HashMap<>();
         err.put("error", message);
         String json = GSON.toJson(err);
-        byte[] bytes = json.getBytes("UTF-8");
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
         exchange.sendResponseHeaders(code, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
@@ -317,10 +318,14 @@ public class JeiHttpBridgeServer {
                 IRecipeRegistry recipeRegistry = runtime.getRecipeRegistry();
                 IFocus.Mode mode = finalIsRecipes ? IFocus.Mode.OUTPUT : IFocus.Mode.INPUT;
                 IFocus<ItemStack> focus = recipeRegistry.createFocus(mode, entry.getStack());
-                List<IRecipeCategory> categories = recipeRegistry.getRecipeCategories(focus);
+                @SuppressWarnings("rawtypes")
+                List categories = recipeRegistry.getRecipeCategories(focus);
 
                 List<Map<String, Object>> recipesList = new ArrayList<>();
-                for (IRecipeCategory<?> category : categories) {
+                for (Object catObj : categories) {
+                    @SuppressWarnings("rawtypes")
+                    IRecipeCategory category = (IRecipeCategory) catObj;
+                    @SuppressWarnings("rawtypes")
                     List wrappers = recipeRegistry.getRecipeWrappers(category, focus);
                     for (Object obj : wrappers) {
                         IRecipeWrapper wrapper = (IRecipeWrapper) obj;
@@ -360,10 +365,13 @@ public class JeiHttpBridgeServer {
                 requireRuntime();
                 IJeiRuntime runtime = JeiMcpBridgePlugin.getJeiRuntime();
                 IRecipeRegistry registry = runtime.getRecipeRegistry();
-                List<IRecipeCategory> categories = registry.getRecipeCategories();
+                @SuppressWarnings("rawtypes")
+                List categories = registry.getRecipeCategories();
 
                 List<Map<String, Object>> result = new ArrayList<>();
-                for (IRecipeCategory<?> cat : categories) {
+                for (Object catObj : categories) {
+                    @SuppressWarnings("rawtypes")
+                    IRecipeCategory cat = (IRecipeCategory) catObj;
                     Map<String, Object> c = new HashMap<>();
                     c.put("uid", cat.getUid());
                     c.put("title", cat.getTitle());
